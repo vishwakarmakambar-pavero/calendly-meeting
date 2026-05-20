@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getAvailableSlots, getEventInfo } from "@/lib/calendly.functions";
 
 export const Route = createFileRoute("/")({
@@ -19,19 +19,26 @@ function BookingPage() {
   const fetchInfo = useServerFn(getEventInfo);
   const fetchSlots = useServerFn(getAvailableSlots);
 
-  // Start from today and show the next 5 days (avoids past days that 400 the API).
+  // Compute "today" only on the client to avoid SSR hydration mismatches
+  // (server clock can be on a different day than the user's browser).
+  const [today, setToday] = useState<Date | null>(null);
+  useEffect(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    setToday(d);
+  }, []);
+
   const weekDays = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    if (!today) return [] as Date[];
     return Array.from({ length: 5 }, (_, i) => {
       const d = new Date(today);
       d.setDate(today.getDate() + i);
       return d;
     });
-  }, []);
+  }, [today]);
 
-  const [selectedDate, setSelectedDate] = useState<Date>(weekDays[0]);
-  const ymd = fmtYMD(selectedDate);
+  const [selectedYmd, setSelectedYmd] = useState<string | null>(null);
+  const ymd = selectedYmd ?? (weekDays[0] ? fmtYMD(weekDays[0]) : null);
 
   const infoQuery = useQuery({
     queryKey: ["calendly", "info"],
@@ -40,7 +47,8 @@ function BookingPage() {
 
   const slotsQuery = useQuery({
     queryKey: ["calendly", "slots", ymd],
-    queryFn: () => fetchSlots({ data: { date: ymd } }),
+    queryFn: () => fetchSlots({ data: { date: ymd! } }),
+    enabled: !!ymd,
   });
 
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
