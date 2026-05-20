@@ -8,15 +8,6 @@ export const Route = createFileRoute("/")({
   component: BookingPage,
 });
 
-function startOfWeek(d: Date) {
-  const date = new Date(d);
-  const day = date.getDay(); // 0 Sun .. 6 Sat
-  const diff = day === 0 ? -6 : 1 - day; // Monday start
-  date.setDate(date.getDate() + diff);
-  date.setHours(0, 0, 0, 0);
-  return date;
-}
-
 function fmtYMD(d: Date) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -28,16 +19,16 @@ function BookingPage() {
   const fetchInfo = useServerFn(getEventInfo);
   const fetchSlots = useServerFn(getAvailableSlots);
 
-  const weekStart = useMemo(() => startOfWeek(new Date()), []);
-  const weekDays = useMemo(
-    () =>
-      Array.from({ length: 5 }, (_, i) => {
-        const d = new Date(weekStart);
-        d.setDate(weekStart.getDate() + i);
-        return d;
-      }),
-    [weekStart],
-  );
+  // Start from today and show the next 5 days (avoids past days that 400 the API).
+  const weekDays = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Array.from({ length: 5 }, (_, i) => {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      return d;
+    });
+  }, []);
 
   const [selectedDate, setSelectedDate] = useState<Date>(weekDays[0]);
   const ymd = fmtYMD(selectedDate);
@@ -54,9 +45,10 @@ function BookingPage() {
 
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+  const info = infoQuery.data?.ok ? infoQuery.data : null;
   const headerParts = [
-    infoQuery.data ? `${infoQuery.data.duration} minutes` : "—",
-    infoQuery.data?.location || "—",
+    info ? `${info.duration} minutes` : "30 minutes",
+    info?.location || "Google Meet",
     "Free",
   ];
 
@@ -73,10 +65,10 @@ function BookingPage() {
             </span>
           ))}
         </h1>
-        {infoQuery.data?.name && (
+        {info?.name && (
           <p className="mt-2 text-sm text-muted-foreground">
-            {infoQuery.data.name}
-            {infoQuery.data.profile_name ? ` · ${infoQuery.data.profile_name}` : ""}
+            {info.name}
+            {info.profile_name ? ` · ${info.profile_name}` : ""}
           </p>
         )}
 
