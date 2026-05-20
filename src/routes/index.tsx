@@ -89,7 +89,7 @@ function BookingPage() {
               <button
                 key={d.toISOString()}
                 type="button"
-                onClick={() => setSelectedDate(d)}
+                onClick={() => setSelectedYmd(fmtYMD(d))}
                 className={
                   "min-w-[88px] rounded-full border px-5 py-2.5 text-sm font-medium transition " +
                   (active
