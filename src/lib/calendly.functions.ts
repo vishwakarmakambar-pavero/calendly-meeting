@@ -3,12 +3,10 @@ import { z } from "zod";
 
 const API = "https://api.calendly.com";
 
-function getEnv() {
+function getToken() {
   const token = process.env.CALENDLY_API_TOKEN;
-  const eventTypeUri = process.env.CALENDLY_EVENT_TYPE_URI;
   if (!token) throw new Error("CALENDLY_API_TOKEN is not configured");
-  if (!eventTypeUri) throw new Error("CALENDLY_EVENT_TYPE_URI is not configured");
-  return { token, eventTypeUri };
+  return token;
 }
 
 async function calendly(path: string, token: string) {
@@ -22,12 +20,38 @@ async function calendly(path: string, token: string) {
   return res.json();
 }
 
+let cachedEventTypeUri: string | null = null;
+async function resolveEventTypeUri(token: string): Promise<string> {
+  if (cachedEventTypeUri) return cachedEventTypeUri;
+  const env = process.env.CALENDLY_EVENT_TYPE_URI?.trim();
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (env) {
+    if (env.startsWith("https://api.calendly.com/event_types/")) {
+      cachedEventTypeUri = env;
+      return env;
+    }
+    if (uuidRe.test(env)) {
+      cachedEventTypeUri = `${API}/event_types/${env}`;
+      return cachedEventTypeUri;
+    }
+  }
+  // Auto-discover from the authenticated user.
+  const me = await calendly("/users/me", token);
+  const userUri = me.resource.uri as string;
+  const list = await calendly(
+    `/event_types?user=${encodeURIComponent(userUri)}&active=true&count=10`,
+    token,
+  );
+  const first = list.collection?.[0]?.uri as string | undefined;
+  if (!first) throw new Error("No active Calendly event types found for this user");
+  cachedEventTypeUri = first;
+  return first;
+}
+
 export const getEventInfo = createServerFn({ method: "GET" }).handler(async () => {
   try {
-    const { token, eventTypeUri } = getEnv();
-    const uri = eventTypeUri.startsWith("http")
-      ? eventTypeUri
-      : `${API}/event_types/${eventTypeUri}`;
+    const token = getToken();
+    const uri = await resolveEventTypeUri(token);
     const path = uri.replace(API, "");
     const data = await calendly(path, token);
     const r = data.resource;
@@ -43,36 +67,28 @@ export const getEventInfo = createServerFn({ method: "GET" }).handler(async () =
       profile_name: r.profile?.name as string | undefined,
     };
   } catch (e) {
-    // Don't break the page if token lacks scope or URI is wrong.
     return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
   }
 });
 
-const SlotsInput = z.object({ date: z.string() }); // YYYY-MM-DD (user's local)
+const SlotsInput = z.object({ date: z.string() });
 
 export const getAvailableSlots = createServerFn({ method: "GET" })
   .inputValidator((d: unknown) => SlotsInput.parse(d))
   .handler(async ({ data }) => {
-    const { token, eventTypeUri } = getEnv();
-    const uri = eventTypeUri.startsWith("http")
-      ? eventTypeUri
-      : `${API}/event_types/${eventTypeUri}`;
+    const token = getToken();
+    const uri = await resolveEventTypeUri(token);
 
-    // Calendly limits available_times to <=7 day windows.
-    // We request a single day (UTC) — UI groups by local date afterwards.
-    // Calendly requires start_time strictly in the future.
     const dayStart = new Date(`${data.date}T00:00:00.000Z`);
     const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000 - 1000);
-    const nowPlus = new Date(Date.now() + 60 * 1000);
+    const nowPlus = new Date(Date.now() + 5 * 60 * 1000);
     const start = dayStart < nowPlus ? nowPlus : dayStart;
-    if (start >= dayEnd) {
-      return { slots: [] };
-    }
-    const end = dayEnd;
+    if (start >= dayEnd) return { slots: [] };
+
     const params = new URLSearchParams({
       event_type: uri,
       start_time: start.toISOString(),
-      end_time: end.toISOString(),
+      end_time: dayEnd.toISOString(),
     });
     const res = await calendly(`/event_type_available_times?${params}`, token);
     return {
